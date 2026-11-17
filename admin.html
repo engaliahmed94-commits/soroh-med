@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>لوحة إدارة صروح ميد</title>
+<meta name="theme-color" content="#0a2d4d">
 <style>
 :root{--bg:#eef3f7;--panel:#fff;--ink:#0a2d4d;--mute:#5b7186;--line:#d8e3ec;--brand:#117a9c;--ok:#0f9f6e;--no:#c8423b;--warn:#b7791f}
 @media (prefers-color-scheme:dark){:root{--bg:#07182a;--panel:#0d2640;--ink:#e6f1f8;--mute:#8fb0c6;--line:#1d3b57;--brand:#4cc3e6;--ok:#3ddc97;--no:#ff7a70;--warn:#f5c15a}}
@@ -34,9 +35,12 @@ input{width:100%;padding:11px;margin-bottom:10px;border:1.5px solid var(--line);
 </style>
 </head>
 <body>
-<header><b>لوحة إدارة صروح ميد</b><button class="btn" id="out" style="display:none">تحديث</button></header>
+<header><b>لوحة إدارة صروح ميد</b><span style="display:flex;gap:6px"><button class="btn" id="ref" style="display:none">تحديث</button><button class="btn" id="out" style="display:none">خروج</button></span></header>
 
-<div id="gate"><h2 id="gt">جاري الاتصال بقاعدة البيانات...</h2><p id="gm"></p><button class="btn pri" id="retry" style="display:none">السماح والمحاولة</button></div>
+<div id="gate"><h2 id="gt">دخول المدير</h2><p id="gm"></p>
+<input id="em" type="email" placeholder="الإيميل" autocomplete="username" dir="ltr">
+<input id="pw" type="password" placeholder="الرمز السري" autocomplete="current-password" dir="ltr">
+<button class="btn pri" id="retry" type="button" style="width:100%">دخول</button></div>
 
 <div id="app">
  <div id="tabs"></div>
@@ -45,27 +49,18 @@ input{width:100%;padding:11px;margin-bottom:10px;border:1.5px solid var(--line);
 </div>
 <div id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
-var SRV="Supabase",PID="udaqibcledtryjgfzxfc",mcp=null;
-function lit(v){if(v===null||v===undefined)return "null";if(typeof v==="number")return isFinite(v)?String(v):"null";if(typeof v==="boolean")return v?"true":"false";return "'"+String(v).replace(/'/g,"''")+"'"}
-function parseRes(res){
- var p=res&&res.payload,t=typeof p==="string"?p:(p&&typeof p.result==="string"?p.result:null);
- if(t===null)t=((res&&res.content)||[]).map(function(b){return b.text||""}).join("");
- try{var j=JSON.parse(t);if(j&&typeof j.result==="string")t=j.result}catch(e){}
- var ce=t.lastIndexOf("</untrusted-data-");
- if(ce<0)throw new Error("نتيجة غير متوقعة");
- var os=t.lastIndexOf("<untrusted-data-",ce),oe=t.indexOf(">",os);
- return JSON.parse(t.slice(oe+1,ce).trim());
-}
-function run(sql){return mcp.callTool(SRV,"execute_sql",{project_id:PID,query:sql})}
+var SB_URL="https://udaqibcledtryjgfzxfc.supabase.co";
+var SB_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVkYXFpYmNsZWR0cnlqZ2Z6eGZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyNzkxMDYsImV4cCI6MjEwODg1NTEwNn0.hsQ7wDCO1-zHc_sgQh-WREiWGv481VEfLw1TgV5wQpI";
+var sb=null;
+function $(i){return document.getElementById(i)}
 function errText(e){
- var c=e&&e.code;
- if(c==="approval_required"||c==="consent_required")return "تحتاج موافقتك على استخدام موصل Supabase لهذه الصفحة.";
- if(c==="server_not_connected"||c==="selection_required")return "موصل Supabase غير متصل. أضفه من الإعدادات ← الموصلات في Claude.";
- if(c==="needs_reauth")return "انتهت صلاحية ربط Supabase. أعد الربط من الإعدادات ← الموصلات.";
- if(c==="not_in_manifest")return "رفضت السماح لهذه الصفحة. أعد تحميل الصفحة ووافق.";
- if(c==="server_unavailable"||c==="upstream_error")return "تعذر الوصول إلى Supabase الآن. حاول بعد قليل.";
- return "خطأ: "+((e&&e.message)||"غير معروف");
+ var m=(e&&e.message)||"";
+ if(/Invalid login/i.test(m))return "الإيميل أو الرمز غير صحيح.";
+ if(/Failed to fetch|NetworkError/i.test(m))return "تعذر الاتصال بالإنترنت أو بقاعدة البيانات.";
+ if(/row-level security|permission/i.test(m))return "ما عندك صلاحية لهذه العملية.";
+ return "خطأ: "+(m||"غير معروف");
 }
 function toast(m){var e=$("toast");e.textContent=m;e.className="on";setTimeout(function(){e.className=""},1800)}
 
@@ -109,15 +104,16 @@ function openForm(s,r){
 }
 
 async function load(){
- var parts=S.map(function(s){return "'"+s.k+"',(select coalesce(json_agg(t),'[]'::json) from (select * from public."+s.k+" order by created_at desc limit 200) t)"});
- var res=await run("select json_build_object("+parts.join(",")+") as d;");
- var d=parseRes(res)[0].d;
- S.forEach(function(s){cache[s.k]=d[s.k]||[]});
+ for(var i=0;i<S.length;i++){
+  var r=await sb.from(S[i].k).select("*").order("created_at",{ascending:false}).limit(200);
+  if(r.error)throw r.error;
+  cache[S[i].k]=r.data||[];
+ }
  render();
 }
-async function log(action,entity,name){try{await run("insert into public.admin_log(action,entity,entity_name) values("+lit(action)+","+lit(entity)+","+lit(name)+");")}catch(e){}}
-async function upd(table,id,o){var c=Object.keys(o).map(function(k){return '"'+k+'"='+lit(o[k])});return run("update public."+table+" set "+c.join(",")+" where id="+lit(id)+";")}
-async function ins(table,o){var k=Object.keys(o);return run("insert into public."+table+"("+k.map(function(x){return '"'+x+'"'}).join(",")+") values("+k.map(function(x){return lit(o[x])}).join(",")+");")}
+async function log(action,entity,name){try{await sb.from("admin_log").insert({action:action,entity:entity,entity_name:name})}catch(e){}}
+async function upd(table,id,o){var r=await sb.from(table).update(o).eq("id",id);if(r.error)throw r.error}
+async function ins(table,o){var r=await sb.from(table).insert(o);if(r.error)throw r.error}
 function render(){
  var tabs=$("tabs");tabs.innerHTML="";
  S.forEach(function(s,i){
@@ -155,7 +151,7 @@ function render(){
     var db=document.createElement("button");db.type="button";db.className="btn";db.textContent="المستمسكات";
     db.onclick=async function(){
      dz.textContent="جاري التحميل...";
-     try{var q=parseRes(await run("select doc_type,file_path from public.verification_documents where company_id="+lit(r.id)+";"))}catch(e){dz.textContent=errText(e);return}
+     try{var qr=await sb.from("verification_documents").select("doc_type,file_path").eq("company_id",r.id);if(qr.error)throw qr.error;var q=qr.data||[]}catch(e){dz.textContent=errText(e);return}
      dz.textContent="";
      if(!q.length){dz.textContent="لا توجد مستمسكات مرفوعة";return}
      q.forEach(function(x){var l=document.createElement("div");l.className="d";l.textContent=(x.doc_type||"مستمسك")+" — "+x.file_path;dz.appendChild(l)});
@@ -165,8 +161,13 @@ function render(){
    var del=document.createElement("button");del.type="button";del.className="btn no";del.textContent="حذف";
    del.onclick=async function(){
     if(!confirm("حذف نهائي: "+s.title(r)+" ؟"))return;
-    var pre=s.k==="companies"?"delete from public.verification_documents where company_id="+lit(r.id)+";update public.devices set company_id=null where company_id="+lit(r.id)+";":"";
-    try{await run(pre+"delete from public."+s.k+" where id="+lit(r.id)+";")}catch(e){toast(errText(e));return}
+    try{
+     if(s.k==="companies"){
+      var d1=await sb.from("verification_documents").delete().eq("company_id",r.id);if(d1.error)throw d1.error;
+      var d2=await sb.from("devices").update({company_id:null}).eq("company_id",r.id);if(d2.error)throw d2.error;
+     }
+     var d3=await sb.from(s.k).delete().eq("id",r.id);if(d3.error)throw d3.error;
+    }catch(e){toast(errText(e));return}
     await log("حذف",s.k,s.title(r));toast("تم الحذف");load();
    };a.appendChild(del);
    row.appendChild(a);
@@ -175,18 +176,38 @@ function render(){
  });
 }
 
-async function enter(){
- $("gt").textContent="جاري الاتصال بقاعدة البيانات...";$("gm").textContent="";$("retry").style.display="none";$("gate").style.display="block";
- try{
-  if(!mcp)mcp=await claude.use("mcp");
-  if(!mcp){$("gt").textContent="تعذر التشغيل هنا";$("gm").textContent="افتح اللوحة من داخل Claude (التطبيق أو claude.ai) حتى تعمل.";return}
-  await load();
-  $("gate").style.display="none";$("app").style.display="block";$("out").style.display="inline-block";
- }catch(e){$("gt").textContent="لم يتم الاتصال";$("gm").textContent=errText(e);$("retry").style.display="inline-block"}
+function showGate(msg){
+ $("app").style.display="none";$("ref").style.display="none";$("out").style.display="none";
+ $("gate").style.display="block";$("gm").textContent=msg||"";
 }
-$("retry").onclick=enter;
-$("out").onclick=function(){load().then(function(){toast("تم التحديث")}).catch(function(e){toast(errText(e))})};
-enter();
+async function checkAdminAndLoad(){
+ var u=await sb.auth.getUser();
+ if(!u.data||!u.data.user){showGate("");return}
+ var a=await sb.from("admins").select("user_id").eq("user_id",u.data.user.id);
+ if(a.error||!a.data||!a.data.length){await sb.auth.signOut();showGate("هذا الحساب ليس مديراً.");return}
+ await load();
+ $("gate").style.display="none";$("app").style.display="block";$("ref").style.display="inline-block";$("out").style.display="inline-block";
+}
+async function login(){
+ var em=$("em").value.trim(),pw=$("pw").value;
+ if(!em||!pw){$("gm").textContent="اكتب الإيميل والرمز.";return}
+ $("gm").textContent="جاري الدخول...";
+ try{
+  var r=await sb.auth.signInWithPassword({email:em,password:pw});
+  if(r.error)throw r.error;
+  await checkAdminAndLoad();
+ }catch(e){showGate(errText(e))}
+}
+async function start(){
+ if(typeof supabase==="undefined"){showGate("تعذر تحميل مكتبة الاتصال. تأكد من الإنترنت وحدّث الصفحة.");return}
+ sb=supabase.createClient(SB_URL,SB_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
+ try{await checkAdminAndLoad()}catch(e){showGate(errText(e))}
+}
+$("retry").onclick=login;
+$("pw").addEventListener("keydown",function(e){if(e.key==="Enter")login()});
+$("ref").onclick=function(){load().then(function(){toast("تم التحديث")}).catch(function(e){toast(errText(e))})};
+$("out").onclick=async function(){await sb.auth.signOut();showGate("تم تسجيل الخروج.")};
+start();
 </script>
 </body>
 </html>
